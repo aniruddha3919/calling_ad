@@ -1,19 +1,21 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Existing permissions -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
     <uses-permission android:name="android.permission.CALL_PHONE"/>
     <uses-permission android:name="android.permission.READ_CALL_LOG"/>
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.INTERNET"/>
+    
+    <!-- ✅ ADD THIS - Required for Android 14+ with specialUse service type -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <application
         android:name="${applicationName}"
         android:label="callad"
         android:icon="@mipmap/ic_launcher">
 
-        <!-- FIXED: Changed from phoneCall to specialUse -->
+        <!-- Overlay Service -->
         <service
             android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"
             android:enabled="true"
@@ -31,6 +33,8 @@
             android:theme="@style/LaunchTheme"
             android:windowSoftInputMode="adjustResize"
             android:hardwareAccelerated="true"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
             android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode">
 
             <meta-data
