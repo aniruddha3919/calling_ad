@@ -1,10 +1,10 @@
 import 'dart:convert';
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_phone_direct_caller/flutter_phone_direct_caller.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
-import 'package:phone_state/phone_state.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,144 +18,128 @@ class MyApp extends StatefulWidget {
   State<MyApp> createState() => _MyAppState();
 }
 
-class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+class _MyAppState extends State<MyApp> {
+  static const platform = MethodChannel('com.example.callad/overlay');
+  
   final List<Map<String, String>> contacts = [
     {"name": "Soumyadeep", "number": "+917450058394"},
-    {"name": "Rakesh", "number": "+919064847969"},
+    {"name": "Aniruddha", "number": "+919831209756"},
   ];
 
-  // ✅ Add debouncing timer
-  Timer? _overlayTimer;
-  bool _isOverlayShowing = false;
-  String? _lastPhoneNumber;
+  bool _isReady = false;
+  Timer? _retryTimer;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _initPermissions();
-    _startPhoneStateListener();
+    _initialize();
   }
 
   @override
   void dispose() {
-    _overlayTimer?.cancel();
-    WidgetsBinding.instance.removeObserver(this);
+    _retryTimer?.cancel();
     super.dispose();
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    debugPrint("App lifecycle state: $state");
+  Future<void> _initialize() async {
+    debugPrint("🔧 Starting initialization...");
+    
+    await _requestPermissions();
+    await _setupMethodChannel();
+    
+    // Wait a bit for overlay system to be ready
+    await Future.delayed(const Duration(milliseconds: 800));
+    
+    setState(() => _isReady = true);
+    debugPrint("✅ App fully initialized");
   }
 
-  Future<void> _initPermissions() async {
-    await [
-      Permission.phone,
-      Permission.systemAlertWindow,
-      Permission.notification,
-    ].request();
-
-    if (!await FlutterOverlayWindow.isPermissionGranted()) {
-      await FlutterOverlayWindow.requestPermission();
+  Future<void> _requestPermissions() async {
+    final phoneStatus = await Permission.phone.request();
+    debugPrint("📞 Phone permission: $phoneStatus");
+    
+    final overlayGranted = await FlutterOverlayWindow.isPermissionGranted();
+    debugPrint("🪟 Overlay permission: $overlayGranted");
+    
+    if (!overlayGranted) {
+      final granted = await FlutterOverlayWindow.requestPermission();
+      debugPrint("🪟 Overlay permission requested: $granted");
     }
   }
 
-  // ✅ Fixed phone state listener with debouncing
-  void _startPhoneStateListener() {
-    PhoneState.stream.listen((PhoneState event) {
-      debugPrint("📞 PhoneState => ${event.status}");
-      debugPrint("📞 Phone Number => ${event.number}");
-
-      switch (event.status) {
-        case PhoneStateStatus.CALL_INCOMING:
-          // Skip if number is null (first event) - wait for the second event with actual number
-          if (event.number == null || event.number!.isEmpty) {
-            debugPrint("⏭️ Skipping null/empty number - waiting for actual number");
-            return;
-          }
-          
-          debugPrint("🔔 Incoming call detected with valid number!");
-          _scheduleOverlay(event.number, isIncoming: true);
-          break;
-
-        case PhoneStateStatus.CALL_STARTED:
-          // Only show if we haven't already shown it for incoming
-          if (!_isOverlayShowing) {
-            debugPrint("📲 Call started!");
-            _scheduleOverlay(event.number, isIncoming: false);
-          }
-          break;
-
-        case PhoneStateStatus.CALL_ENDED:
-          debugPrint("📵 Call ended");
-          _overlayTimer?.cancel();
-          _isOverlayShowing = false;
-          _lastPhoneNumber = null;
-          Future.delayed(const Duration(milliseconds: 300), () {
-            _closeOverlay();
-          });
-          break;
-
-        default:
-          break;
-      }
-    });
-  }
-
-  // ✅ Debounced overlay display
-  void _scheduleOverlay(String? phoneNumber, {bool isIncoming = false}) {
-    // Cancel any existing timer
-    _overlayTimer?.cancel();
-
-    // Skip if already showing same number
-    if (_isOverlayShowing && _lastPhoneNumber == phoneNumber) {
-      debugPrint("⏭️ Overlay already showing for this number");
-      return;
-    }
-
-    // Wait 300ms to collect all events before showing overlay
-    _overlayTimer = Timer(const Duration(milliseconds: 300), () {
-      _showOverlay(phoneNumber, isIncoming: isIncoming);
-    });
-  }
-
-  Future<void> _showOverlay(String? phoneNumber, {bool isIncoming = false}) async {
-    try {
-      // Double-check if already active
-      final isActive = await FlutterOverlayWindow.isActive();
-      if (isActive) {
-        debugPrint("⚠️ Overlay already active");
-        return;
-      }
-
-      _isOverlayShowing = true;
-      _lastPhoneNumber = phoneNumber;
-
-      debugPrint("🟢 Showing overlay for: $phoneNumber (Incoming: $isIncoming)");
-
-      final data = jsonEncode({
-        "phoneNumber": phoneNumber ?? "Unknown",
-        "isIncoming": isIncoming,
-      });
-
-      await FlutterOverlayWindow.shareData(data);
-
-      await FlutterOverlayWindow.showOverlay(
-        height: WindowSize.matchParent,
-        width: WindowSize.matchParent,
-        enableDrag: false,
-        flag: OverlayFlag.defaultFlag,
-        alignment: OverlayAlignment.center,
-        overlayTitle: isIncoming ? "Incoming Call" : "Calling",
-        overlayContent: phoneNumber ?? "Unknown Number",
-      );
+  Future<void> _setupMethodChannel() async {
+    platform.setMethodCallHandler((call) async {
+      debugPrint("📞 Method call: ${call.method}");
       
-      debugPrint("✅ Overlay shown successfully");
-    } catch (e) {
-      _isOverlayShowing = false;
-      debugPrint("❌ Overlay error: $e");
+      if (call.method == 'handleOverlay') {
+        final Map<dynamic, dynamic> data = call.arguments;
+        debugPrint("📦 Data: $data");
+        
+        if (data['action'] == 'show') {
+          await _showOverlayWithRetry(
+            data['phoneNumber'] as String,
+            isIncoming: data['isIncoming'] as bool,
+          );
+        } else if (data['action'] == 'close') {
+          await _closeOverlay();
+        }
+      }
+    });
+    debugPrint("✅ Method channel setup complete");
+  }
+
+  // Retry showing overlay if it fails initially
+  Future<void> _showOverlayWithRetry(String phoneNumber, {bool isIncoming = false, int retries = 3}) async {
+    for (int i = 0; i < retries; i++) {
+      try {
+        debugPrint("🔄 Attempt ${i + 1} to show overlay");
+        
+        // Check if already showing
+        final isActive = await FlutterOverlayWindow.isActive();
+        if (isActive) {
+          debugPrint("⚠️ Overlay already active");
+          return;
+        }
+
+        // Check permission again
+        final hasPermission = await FlutterOverlayWindow.isPermissionGranted();
+        if (!hasPermission) {
+          debugPrint("❌ No overlay permission");
+          return;
+        }
+
+        debugPrint("🟢 Showing overlay for: $phoneNumber (Incoming: $isIncoming)");
+
+        // Share data
+        final overlayData = jsonEncode({
+          "phoneNumber": phoneNumber,
+          "isIncoming": isIncoming,
+        });
+        
+        await FlutterOverlayWindow.shareData(overlayData);
+        debugPrint("✅ Data shared: $overlayData");
+
+        // Show overlay
+        await FlutterOverlayWindow.showOverlay(
+          height: WindowSize.matchParent,
+          width: WindowSize.matchParent,
+          enableDrag: false,
+          overlayTitle: "Incoming Call",
+          overlayContent: phoneNumber,
+        );
+        
+        debugPrint("✅ Overlay shown!");
+        return; // Success!
+        
+      } catch (e) {
+        debugPrint("❌ Attempt ${i + 1} failed: $e");
+        if (i < retries - 1) {
+          await Future.delayed(Duration(milliseconds: 500 * (i + 1)));
+        }
+      }
     }
+    
+    debugPrint("❌ All retry attempts failed");
   }
 
   Future<void> _closeOverlay() async {
@@ -165,19 +149,17 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
         debugPrint("⚠️ Overlay not active");
         return;
       }
-
-      debugPrint("🔴 Closing overlay...");
+      
       await FlutterOverlayWindow.closeOverlay();
-      _isOverlayShowing = false;
-      debugPrint("✅ Overlay closed successfully");
+      debugPrint("✅ Overlay closed");
     } catch (e) {
-      debugPrint("❌ Close overlay error: $e");
+      debugPrint("❌ Error closing: $e");
     }
   }
 
-  Future<void> _call(String number) async {
-    debugPrint("📞 Calling: $number");
-    await FlutterPhoneDirectCaller.callNumber(number);
+  Future<void> _testOverlay() async {
+    debugPrint("🧪 Testing overlay manually");
+    await _showOverlayWithRetry("+919876543210", isIncoming: true);
   }
 
   @override
@@ -186,31 +168,77 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
       debugShowCheckedModeBanner: false,
       home: Scaffold(
         appBar: AppBar(
-          title: const Text("Contacts"),
+          title: const Text("Call Overlay"),
           backgroundColor: Colors.blue,
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.bug_report),
+              onPressed: _testOverlay,
+              tooltip: "Test Overlay",
+            ),
+          ],
         ),
         body: Column(
           children: [
+            // Status Banner
             Container(
-              padding: const EdgeInsets.all(12),
-              color: Colors.green.shade50,
+              padding: const EdgeInsets.all(16),
+              color: _isReady ? Colors.green.shade50 : Colors.orange.shade50,
               child: Row(
                 children: [
-                  Icon(Icons.check_circle, color: Colors.green.shade700, size: 20),
-                  const SizedBox(width: 10),
+                  Icon(
+                    _isReady ? Icons.check_circle : Icons.hourglass_empty,
+                    color: _isReady ? Colors.green.shade700 : Colors.orange.shade700,
+                    size: 24,
+                  ),
+                  const SizedBox(width: 12),
                   Expanded(
-                    child: Text(
-                      "✓ Overlay enabled - Works when app is open or minimized",
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.green.shade700,
-                        fontWeight: FontWeight.w500,
-                      ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          _isReady ? "✓ System Ready" : "⏳ Initializing...",
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: _isReady ? Colors.green.shade900 : Colors.orange.shade900,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          _isReady 
+                            ? "Overlay will show on incoming calls" 
+                            : "Please wait...",
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: _isReady ? Colors.green.shade700 : Colors.orange.shade700,
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
             ),
+            
+            // Test Button
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: ElevatedButton.icon(
+                onPressed: _isReady ? _testOverlay : null,
+                icon: const Icon(Icons.play_arrow),
+                label: const Text("Test Overlay Now"),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.blue,
+                  foregroundColor: Colors.white,
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                ),
+              ),
+            ),
+            
+            const Divider(),
+            
+            // Contact List
             Expanded(
               child: ListView.builder(
                 itemCount: contacts.length,
@@ -219,23 +247,25 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
                   return Card(
                     margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                     child: ListTile(
-                      leading: const Icon(Icons.person, size: 32, color: Colors.blue),
-                      title: Text(
-                        contact['name']!,
-                        style: const TextStyle(
-                          fontSize: 18,
-                          fontWeight: FontWeight.w600,
+                      leading: CircleAvatar(
+                        backgroundColor: Colors.blue.shade100,
+                        child: Text(
+                          contact['name']![0],
+                          style: TextStyle(
+                            color: Colors.blue.shade900,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
-                      subtitle: Text(
-                        contact['number']!,
-                        style: const TextStyle(fontSize: 14),
+                      title: Text(
+                        contact['name']!,
+                        style: const TextStyle(fontWeight: FontWeight.w600),
                       ),
+                      subtitle: Text(contact['number']!),
                       trailing: IconButton(
-                        icon: const Icon(Icons.call, color: Colors.green, size: 32),
-                        onPressed: () => _call(contact['number']!),
+                        icon: const Icon(Icons.call, color: Colors.green, size: 28),
+                        onPressed: () => FlutterPhoneDirectCaller.callNumber(contact['number']!),
                       ),
-                      onTap: () => _call(contact['number']!),
                     ),
                   );
                 },
@@ -248,19 +278,14 @@ class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
   }
 }
 
-/// =================================================================
-/// OVERLAY UI (Same as before)
-/// =================================================================
-
+// OVERLAY UI
 @pragma("vm:entry-point")
 void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(
-    const MaterialApp(
-      debugShowCheckedModeBanner: false,
-      home: OverlayUI(),
-    ),
-  );
+  runApp(const MaterialApp(
+    debugShowCheckedModeBanner: false,
+    home: OverlayUI(),
+  ));
 }
 
 class OverlayUI extends StatefulWidget {
@@ -272,32 +297,32 @@ class OverlayUI extends StatefulWidget {
 
 class _OverlayUIState extends State<OverlayUI> {
   String phoneNumber = "Unknown";
-  String callerName = "Unknown Caller";
+  String callerName = "Unknown";
   bool isIncoming = false;
 
   @override
   void initState() {
     super.initState();
-    _getCallerInfo();
+    debugPrint("🎨 Overlay UI initialized");
+    _listenToData();
   }
 
-  Future<void> _getCallerInfo() async {
+  void _listenToData() {
     FlutterOverlayWindow.overlayListener.listen((data) {
       try {
-        debugPrint("📥 Received data: $data");
-        final parsedData = jsonDecode(data);
-
+        debugPrint("📥 Overlay received data: $data");
+        final parsed = jsonDecode(data);
+        
         if (mounted) {
           setState(() {
-            phoneNumber = parsedData['phoneNumber'] ?? "Unknown";
-            isIncoming = parsedData['isIncoming'] ?? false;
+            phoneNumber = parsed['phoneNumber'] ?? "Unknown";
+            isIncoming = parsed['isIncoming'] ?? false;
             callerName = _lookupContact(phoneNumber);
           });
+          debugPrint("✅ Overlay UI updated: $callerName");
         }
-
-        debugPrint("✅ Updated: $callerName ($phoneNumber) - Incoming: $isIncoming");
       } catch (e) {
-        debugPrint("❌ Error parsing data: $e");
+        debugPrint("❌ Error parsing overlay data: $e");
       }
     });
   }
@@ -316,118 +341,140 @@ class _OverlayUIState extends State<OverlayUI> {
       backgroundColor: Colors.transparent,
       body: GestureDetector(
         onTap: () {
-          try {
-            FlutterOverlayWindow.closeOverlay();
-          } catch (e) {
-            debugPrint("Error closing overlay: $e");
-          }
+          debugPrint("👆 Overlay tapped - closing");
+          FlutterOverlayWindow.closeOverlay();
         },
         child: Container(
           width: double.infinity,
           height: double.infinity,
-          color: Colors.black,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                isIncoming ? Colors.blue.shade900 : Colors.green.shade900,
+                Colors.black,
+              ],
+            ),
+          ),
           child: Stack(
             children: [
-              Positioned.fill(
-                child: Image.network(
-                  "https://picsum.photos/1080/2400",
-                  fit: BoxFit.cover,
-                  loadingBuilder: (context, child, loadingProgress) {
-                    if (loadingProgress == null) return child;
-                    return Container(
-                      color: Colors.black,
-                      child: const Center(
-                        child: CircularProgressIndicator(color: Colors.white),
+              // Main Content
+              Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    // Phone Icon
+                    Container(
+                      width: 140,
+                      height: 140,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white.withOpacity(0.2),
+                        border: Border.all(color: Colors.white, width: 4),
                       ),
-                    );
-                  },
-                  errorBuilder: (_, __, ___) => Container(
-                    color: Colors.black,
-                    child: const Center(
-                      child: Icon(Icons.phone_in_talk, size: 200, color: Colors.white),
+                      child: Icon(
+                        isIncoming ? Icons.phone_in_talk : Icons.phone_callback,
+                        size: 70,
+                        color: Colors.white,
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 40),
+                    
+                    // Call Status
+                    Text(
+                      isIncoming ? "INCOMING CALL" : "CALLING",
+                      style: TextStyle(
+                        fontSize: 18,
+                        color: Colors.white.withOpacity(0.9),
+                        letterSpacing: 3,
+                        fontWeight: FontWeight.w300,
+                      ),
+                    ),
+                    const SizedBox(height: 20),
+                    
+                    // Caller Name
+                    Text(
+                      callerName,
+                      style: const TextStyle(
+                        fontSize: 36,
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    
+                    // Phone Number
+                    Text(
+                      phoneNumber,
+                      style: TextStyle(
+                        fontSize: 22,
+                        color: Colors.white.withOpacity(0.8),
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    const SizedBox(height: 50),
+                    
+                    // Loading Indicator
+                    SizedBox(
+                      width: 60,
+                      height: 60,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 4,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          isIncoming ? Colors.blueAccent : Colors.greenAccent,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
+              
+              // Close Button
               Positioned(
-                bottom: 100,
-                left: 0,
-                right: 0,
-                child: Container(
-                  padding: const EdgeInsets.all(30),
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.transparent,
-                        Colors.black.withOpacity(0.8),
-                      ],
-                    ),
-                  ),
-                  child: Column(
-                    children: [
-                      Text(
-                        isIncoming ? "Incoming Call..." : "Calling...",
-                        style: const TextStyle(
-                          fontSize: 32,
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 2,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        callerName,
-                        style: const TextStyle(
-                          fontSize: 24,
-                          color: Colors.white,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 5),
-                      Text(
-                        phoneNumber,
-                        style: TextStyle(
-                          fontSize: 20,
-                          color: Colors.white.withOpacity(0.8),
-                          letterSpacing: 1.5,
-                        ),
-                      ),
-                      const SizedBox(height: 25),
-                      SizedBox(
-                        width: 50,
-                        height: 50,
-                        child: CircularProgressIndicator(
-                          strokeWidth: 4,
-                          color: isIncoming ? Colors.blueAccent : Colors.greenAccent,
-                        ),
-                      ),
-                      const SizedBox(height: 30),
-                      const Text(
-                        "Tap anywhere to close",
-                        style: TextStyle(
-                          fontSize: 14,
-                          color: Colors.white54,
-                          fontStyle: FontStyle.italic,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-              Positioned(
-                top: 50,
-                right: 20,
+                top: 60,
+                right: 24,
                 child: GestureDetector(
-                  onTap: () => FlutterOverlayWindow.closeOverlay(),
+                  onTap: () {
+                    debugPrint("❌ Close button pressed");
+                    FlutterOverlayWindow.closeOverlay();
+                  },
                   child: Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: const BoxDecoration(
-                      color: Colors.black45,
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.white.withOpacity(0.3),
                       shape: BoxShape.circle,
                     ),
-                    child: const Icon(Icons.close, color: Colors.white, size: 35),
+                    child: const Icon(
+                      Icons.close,
+                      color: Colors.white,
+                      size: 28,
+                    ),
+                  ),
+                ),
+              ),
+              
+              // Tap to close hint
+              Positioned(
+                bottom: 60,
+                left: 0,
+                right: 0,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.4),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      "Tap anywhere to close",
+                      style: TextStyle(
+                        fontSize: 14,
+                        color: Colors.white.withOpacity(0.9),
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
                   ),
                 ),
               ),

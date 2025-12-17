@@ -1,55 +1,92 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.callad">
 
-    <!-- Existing permissions -->
+    <!-- ================= PERMISSIONS ================= -->
+
+    <!-- Overlay -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+
+    <!-- Call state -->
     <uses-permission android:name="android.permission.READ_PHONE_STATE"/>
-    <uses-permission android:name="android.permission.CALL_PHONE"/>
-    <uses-permission android:name="android.permission.READ_CALL_LOG"/>
-    <uses-permission android:name="android.permission.INTERNET"/>
-    
-    <!-- ✅ ADD THIS - Required for Android 14+ with specialUse service type -->
+
+    <!-- Foreground service -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+
+    <!-- Android 14+ REQUIRED for specialUse -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
+
+    <!-- Call screening -->
+    <uses-permission android:name="android.permission.READ_CALL_LOG"/>
+
+    <!-- ================================================= -->
 
     <application
         android:name="${applicationName}"
         android:label="callad"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="true"
+        android:supportsRtl="true">
 
-        <!-- Overlay Service -->
-        <service
-            android:name="flutter.overlay.window.flutter_overlay_window.OverlayService"
-            android:enabled="true"
-            android:exported="false"
-            android:foregroundServiceType="specialUse">
-            <property
-                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
-                android:value="Display overlay during calls"/>
-        </service>
+        <!-- ================= MAIN ACTIVITY ================= -->
 
         <activity
-            android:name=".MainActivity"
+            android:name="com.example.callad.MainActivity"
             android:exported="true"
-            android:launchMode="singleTop"
+            android:launchMode="singleTask"
             android:theme="@style/LaunchTheme"
-            android:windowSoftInputMode="adjustResize"
             android:hardwareAccelerated="true"
             android:showWhenLocked="true"
             android:turnScreenOn="true"
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode">
-
-            <meta-data
-                android:name="io.flutter.embedding.android.NormalTheme"
-                android:resource="@style/NormalTheme" />
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|density|uiMode">
 
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
         </activity>
+
+        <!-- ================= CALL SCREENING ================= -->
+
+        <service
+            android:name="com.example.callad.MyCallScreeningService"
+            android:permission="android.permission.BIND_SCREENING_SERVICE"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.telecom.CallScreeningService"/>
+            </intent-filter>
+        </service>
+
+        <!-- ================= BROADCAST RECEIVER ================= -->
+
+        <receiver
+            android:name="com.example.callad.PhoneStateReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.PHONE_STATE"/>
+            </intent-filter>
+        </receiver>
+
+        <!-- ================= OVERLAY SERVICE ================= -->
+
+        <service
+            android:name="com.example.callad.CallOverlayService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+
+            <!-- REQUIRED for Android 14+ -->
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Call incoming overlay"/>
+
+        </service>
+
+        <!-- ================================================= -->
 
         <meta-data
             android:name="flutterEmbedding"
-            android:value="2" />
+            android:value="2"/>
+
     </application>
 
 </manifest>
